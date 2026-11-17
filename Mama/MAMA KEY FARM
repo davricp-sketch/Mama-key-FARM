@@ -134,8 +134,9 @@ local function Hash(s)
     return string.format("%08x%08x", fnv(s, 0x811C9DC5), fnv(s .. "#", 0x9E3779B9))
 end
 
--- Cuando la key es válida: firma la pieza con la clave A y pide el hub al Worker (GET).
--- El Worker responde el código Lua del hub directamente. Cualquier fallo = no se entrega nada.
+-- Cuando la key es válida: firma la pieza con la clave A y se la presenta al Worker (GET).
+-- El Worker vuelve a validar la key y, solo si todo está bien, devuelve el hub y su firma sig2 (clave B).
+-- Cualquier fallo = no se entrega nada.
 -- Devuelve: true, source, piece   |   false, mensaje
 local function RequestHub(key, hwid)
     if not httpRequest then return false, "Tu ejecutor no permite solicitudes HTTP." end
@@ -149,8 +150,12 @@ local function RequestHub(key, hwid)
             Method = "GET",
             Headers = {
                 ["X-DVDR-Auth"] = AUTH_TOKEN,
+                ["X-DVDR-Key"] = key,
+                ["X-DVDR-Hwid"] = hwid,
+                ["X-DVDR-Ts"] = tostring(ts),
+                ["X-DVDR-Sig"] = sig,
                 ["User-Agent"] = "DVDR-Loader/1.0",
-                ["Accept"] = "text/plain",
+                ["Accept"] = "application/json",
             },
         })
     end)
@@ -164,15 +169,19 @@ local function RequestHub(key, hwid)
         return false, msg
     end
 
-    local source = response.Body
-    if #source == 0 or not loadstring(source) then
+    local dOk, data = pcall(function() return HttpService:JSONDecode(response.Body) end)
+    if not dOk or type(data) ~= "table" or data.success ~= true
+        or type(data.source) ~= "string" or data.source == "" or type(data.sig2) ~= "string" then
         return false, "Respuesta inválida del servidor."
     end
+    if not loadstring(data.source) then
+        return false, "El hub recibido no es válido."
+    end
 
-    return true, source, { key = key, hwid = hwid, ts = ts, sig = sig }
+    return true, data.source, { key = key, hwid = hwid, ts = ts, sig = sig, sig2 = data.sig2 }
 end
 
--- Deja la pieza donde el hub la lee y ejecuta el hub.
+-- Deja la pieza (A + B) donde el hub la lee y ejecuta el hub.
 local function RunHub(source, piece)
     local env = (getgenv and getgenv()) or _G
     env[PIECE_NAME] = piece
