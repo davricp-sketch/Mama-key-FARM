@@ -1,7 +1,7 @@
 --[[
     DVDR FARM  -  Cargador de Key
     Solo pide la key y la valida con el Worker.
-    NO contiene nada del hub: el hub lo entrega el Worker solo si la key es válida.
+    NO contiene nada del hub: el hub solo se pide al Worker cuando la key quedó verificada.
     Diseño: negro con bordes plateados (igual que DVDR HUB V4 Black).
 ]]
 
@@ -15,11 +15,11 @@ local playerGui = player:WaitForChild("PlayerGui")
 local camera = workspace.CurrentCamera
 
 -- CONFIGURACIÓN -------------------------------------------------
-local WORKER_URL = "https://dvdr-farm-admin.davricp.workers.dev/"   -- Worker de DVDR FARM (valida la key)
+local WORKER_URL = "https://dvdr-farm-admin.davricp.workers.dev/"   -- Worker de DVDR FARM
 local AUTH_TOKEN = "DVDR_HUB_V2_SECRET_PASS_2026"   -- igual a DVDR_AUTH_SECRET del Worker
 local KEY_FILE = "DVDR_FARM_SavedKey.txt"
 local GUI_NAME = "DVDR_FARM_KEY"
-local SECRET_A = "A-1p6wEGnBEiif3tculYdIHp8THwDmN2CW"   -- clave secreta del CARGADOR
+local SECRET_A = "A-1p6wEGnBEiif3tculYdIHp8THwDmN2CW"   -- clave secreta del CARGADOR (el hub la usa para comprobar la pieza)
 local PIECE_NAME = "DVDR_FARM_PIEZA"           -- debe ser igual en cargador y hub
 local GUARD_URL = "https://dvdr-farm-urban-reload.davricp.workers.dev/"   -- Worker que entrega el hub
 local LOGO_IMAGE = "rbxassetid://87968271285283"
@@ -135,7 +135,7 @@ local function Hash(s)
 end
 
 -- Cuando la key es válida: firma la pieza con la clave A y pide el hub al Worker (GET).
--- El Worker responde el código Lua del hub directamente.
+-- El Worker responde el código Lua del hub directamente. Cualquier fallo = no se entrega nada.
 -- Devuelve: true, source, piece   |   false, mensaje
 local function RequestHub(key, hwid)
     if not httpRequest then return false, "Tu ejecutor no permite solicitudes HTTP." end
@@ -147,14 +147,21 @@ local function RequestHub(key, hwid)
         return httpRequest({
             Url = GUARD_URL,
             Method = "GET",
-            Headers = { ["User-Agent"] = "DVDR-Loader/1.0", ["Accept"] = "text/plain" },
+            Headers = {
+                ["X-DVDR-Auth"] = AUTH_TOKEN,
+                ["User-Agent"] = "DVDR-Loader/1.0",
+                ["Accept"] = "text/plain",
+            },
         })
     end)
     if not ok or type(response) ~= "table" or type(response.Body) ~= "string" then
         return false, "No se pudo conectar con el servidor."
     end
     if response.StatusCode ~= 200 then
-        return false, "Acceso denegado (" .. tostring(response.StatusCode) .. ")."
+        local msg = "Acceso denegado (" .. tostring(response.StatusCode) .. ")"
+        local detail = response.Body:sub(1, 60)
+        if #detail > 0 and not detail:find("[\r\n<{]") then msg = msg .. " " .. detail end
+        return false, msg
     end
 
     local source = response.Body
@@ -378,7 +385,7 @@ label(infoCard, {
     TextWrapped = true, Text = "Tu key se vincula a este dispositivo la primera vez que la uses.",
 })
 
--- Barra inferior: mensajes + botones
+-- Barra inferior (como CONFIGURACIÓN): mensajes + botones
 local bottom = make("Frame", {
     Position = UDim2.new(0, 14, 1, -68), Size = UDim2.new(1, -28, 0, 54), BackgroundColor3 = C.card, BorderSizePixel = 0,
 }, window)
@@ -531,7 +538,7 @@ local function Validate(rawKey)
         local hwid = GetHWID() or ""
         local passed, source, piece = RequestHub(key, hwid)
         if not passed then
-            -- el Worker no dejó pasar: no se entrega nada
+            -- el guardia no dejó pasar: no se entrega nada
             finished = false
             tween(openStroke, TI(0.3), { Color = C.red })
             tween(openArrow, TI(0.3), { TextColor3 = C.red })
